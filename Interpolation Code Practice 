@@ -1,0 +1,116 @@
+# FSHD: interpolate every biomarker over time, then plot mean change between two time points
+# Paste into one notebook cell (or run as a script). Set DATA_PATH first.
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Load the dataset 
+DATA_PATH = "/Users/julialundy/Downloads/Computational/Module 1/BME_2315_Module2/Dataset/Module2_FSHD_Dataset.csv"   
+df = pd.read_csv(DATA_PATH)
+
+# Months since baseline for each visit (baseline, year-1, year-2) are already in the dataset as lag_months_baseline, lag_months_y1, lag_months_y2. We'll use these to interpolate each biomarker at two time points of interest.
+TIME_1, TIME_2 = 12, 22
+
+# Interpolation will be done for the following biomarkers, with the specified columns for each visit, units, and direction that indicates worsening:
+V = ["baseline", "y1", "y2"]
+BIOMARKERS = {   # name: (columns at baseline/y1/y2, units, direction that means "worse")
+    "TA fat fraction (Right)":     ([f"ff_{v}_R" for v in V], "% fat", "up"),
+    "TA fat fraction (Left)":     ([f"ff_{v}_L" for v in V], "% fat", "up"),
+    "Dorsiflexion (Right)":        ([f"dorsiflexion_qmt_R_{v}" for v in V], "QMT force", "down"),
+    "Dorsiflexion (Left)":        ([f"dorsiflexion_qmt_L_{v}" for v in V], "QMT force", "down"),
+    "10 m walk/run":           ([f"wr_10_{v}" for v in V], "seconds", "up"),
+    "Clinical Severity Score": ([f"clinical_severity_score_{v}" for v in V], "score", "up"),
+}
+
+def interp_at(row, cols, t):
+    """Estimate a biomarker at time t (months) from one patient's measured visits."""
+    pts = pd.DataFrame({"t": [row[f"lag_months_{v}"] for v in V],
+                        "y": [row[c] for c in cols]}).dropna()
+    pts = pts.drop_duplicates(subset="t").sort_values("t")   # e.g. 1-0031 has two visits at 24.3 mo
+    if len(pts) < 2 or t < pts["t"].min() or t > pts["t"].max():
+        return np.nan                                        # outside measured range -> don't guess
+    return np.interp(t, pts["t"], pts["y"])
+
+records = []
+for _, r in df.iterrows():
+    for name, (cols, units, worse) in BIOMARKERS.items():
+        v1, v2 = interp_at(r, cols, TIME_1), interp_at(r, cols, TIME_2)
+        records.append({"subject_id": r["subject_id"], "biomarker": name,
+                        f"at_{TIME_1}mo": v1, f"at_{TIME_2}mo": v2, "change": v2 - v1})
+long_df = pd.DataFrame(records)
+
+# Summary statistics for each biomarker: n, mean change, SD, SEM, 95% CI, units, direction of worsening, and SRM (standardized response mean)
+summary = (long_df.dropna(subset=["change"]).groupby("biomarker", sort=False)["change"]
+           .agg(n="count", mean_change="mean", sd="std"))
+summary["sem"] = summary["sd"] / np.sqrt(summary["n"])
+summary["ci95"] = 1.96 * summary["sem"]
+summary["units"] = [BIOMARKERS[b][1] for b in summary.index]
+summary["worse_if"] = [BIOMARKERS[b][2] for b in summary.index]
+# SRM signed so positive = worsening for every biomarker
+summary["SRM_worsening"] = [m / s * (1 if BIOMARKERS[b][2] == "up" else -1)
+                            for b, m, s in zip(summary.index, summary["mean_change"], summary["sd"])]
+print(summary.round(3).to_string())
+
+# Bar graph of mean change with 95% CI for each biomarker
+fig, axes = plt.subplots(2, 3, figsize=(11, 6.5))
+for ax, (name, s) in zip(axes.flat, summary.iterrows()):
+    ax.bar([0], [s["mean_change"]], width=0.5, color="#3b6ea8",
+           yerr=[s["ci95"]], capsize=6, error_kw={"lw": 1.2, "ecolor": "0.25"})
+    ax.axhline(0, color="0.3", lw=0.8)
+    lim = max(abs(s["mean_change"]) + s["ci95"], 1e-6) * 1.35
+    ax.set_ylim(-lim, lim)
+    ax.set_xlim(-0.8, 0.8)
+    ax.set_xticks([])
+    ax.set_title(name, fontsize=11)
+    ax.set_ylabel(f"Mean change ({s['units']})", fontsize=9)
+    arrow = "↑ = worse" if s["worse_if"] == "up" else "↓ = worse"
+    ax.text(0.97, 0.95, arrow, transform=ax.transAxes, ha="right", va="top", fontsize=9, color="0.35")
+    ax.text(0.03, 0.05, f"n = {int(s['n'])}\nmean = {s['mean_change']:+.2f}",
+            transform=ax.transAxes, fontsize=9, color="0.2")
+    ax.spines[["top", "right", "bottom"]].set_visible(False)
+    ax.grid(axis="y", color="0.92")
+    ax.set_axisbelow(True)
+fig.suptitle(f"Mean change from {TIME_1} to {TIME_2} months (interpolated), ±95% CI", fontsize=13)
+plt.tight_layout()
+plt.show()
+
+# Bar graph of SRM (standardized response mean) for each biomarker, signed so positive = worsening
+srm = summary["SRM_worsening"].sort_values()
+fig, ax = plt.subplots(figsize=(7.5, 4))
+ax.barh(srm.index, srm.values, color="#3b6ea8", height=0.55)
+for y, v in enumerate(srm.values):
+    ax.text(v + (0.02 if v >= 0 else -0.02), y, f"{v:.2f}", va="center",
+            ha="left" if v >= 0 else "right", fontsize=9)
+ax.axvline(0, color="0.3", lw=0.8)
+ax.set_xlim(min(srm.min(), 0) - 0.2, max(srm.max(), 0.8) + 0.1)
+ax.set_ylim(-0.6, len(srm) - 0.5)
+for x in [0.2, 0.5, 0.8]:   # dashed reference lines at small, moderate, and large SRM thresholds
+    ax.axvline(x, color="0.8", ls="--", lw=0.8)
+ax.set_xlabel("SRM (positive = worsening)", labelpad=8)
+ax.set_title(f"Responsiveness, {TIME_1} to {TIME_2} months")
+ax.spines[["top", "right"]].set_visible(False)
+plt.tight_layout()
+plt.show()
+
+# Plot measured values and interpolated estimates for a few example patients
+patients = ["1-0021", "1-0025", "13-0008"]
+colors = ["tab:blue", "tab:orange", "tab:green"]
+
+fig, axes = plt.subplots(2, 3, figsize=(13, 7))
+for ax, (name, (cols, units, worse)) in zip(axes.flat, BIOMARKERS.items()):
+    for pid, color in zip(patients, colors):
+        r = df[df["subject_id"] == pid].iloc[0]
+        measured = pd.Series([r[c] for c in cols], index=[r[f"lag_months_{v}"] for v in V]).dropna()
+        ax.plot(measured.index, measured.values, "-o", color=color, label=f"Patient {pid}")
+        estimates = [interp_at(r, cols, TIME_1), interp_at(r, cols, TIME_2)]
+        ax.plot([TIME_1, TIME_2], estimates, "D", mfc="white", mec=color, mew=2, ms=9)
+    ax.set_title(name)
+    ax.set_xlabel("Months since baseline")
+    ax.set_ylabel(units)
+
+axes[0, 0].plot([], [], "D", mfc="white", mec="gray", mew=2, label="Interpolated estimate")
+fig.legend(*axes[0, 0].get_legend_handles_labels(), loc="lower center", ncol=4)
+fig.suptitle("Measured values (circles) and interpolated estimates (diamonds)")
+plt.tight_layout(rect=[0, 0.06, 1, 1])
+plt.show()
