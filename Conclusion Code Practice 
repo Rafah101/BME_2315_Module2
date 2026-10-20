@@ -1,9 +1,8 @@
-# FSHD: interpolate every biomarker over time, then plot mean change between two time points
-# Paste into one notebook cell (or run as a script). Set DATA_PATH first.
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+
+import pandas as pd # for data handling
+import numpy as np # for numerical calculations
+import matplotlib.pyplot as plt # for plotting
 
 # Load the dataset 
 DATA_PATH = "/Users/julialundy/Downloads/Computational/Module 1/BME_2315_Module2/Dataset/Module2_FSHD_Dataset.csv"   
@@ -13,7 +12,7 @@ df = pd.read_csv(DATA_PATH)
 TIME_1, TIME_2 = 12, 22
 
 # Interpolation will be done for the following biomarkers, with the specified columns for each visit, units, and direction that indicates worsening:
-V = ["baseline", "y1", "y2"]
+V = ["baseline", "y1", "y2"] 
 BIOMARKERS = {   # name: (columns at baseline/y1/y2, units, direction that means "worse")
     "TA fat fraction (Right)":     ([f"ff_{v}_R" for v in V], "% fat", "up"),
     "TA fat fraction (Left)":     ([f"ff_{v}_L" for v in V], "% fat", "up"),
@@ -23,6 +22,7 @@ BIOMARKERS = {   # name: (columns at baseline/y1/y2, units, direction that means
     "Clinical Severity Score": ([f"clinical_severity_score_{v}" for v in V], "score", "up"),
 }
 
+# interpolate a biomarker at a given time point for one patient, using the measured values at the three visits
 def interp_at(row, cols, t):
     """Estimate a biomarker at time t (months) from one patient's measured visits."""
     pts = pd.DataFrame({"t": [row[f"lag_months_{v}"] for v in V],
@@ -31,7 +31,6 @@ def interp_at(row, cols, t):
     if len(pts) < 2 or t < pts["t"].min() or t > pts["t"].max():
         return np.nan                                        # outside measured range -> don't guess
     return np.interp(t, pts["t"], pts["y"])
-
 records = []
 for _, r in df.iterrows():
     for name, (cols, units, worse) in BIOMARKERS.items():
@@ -111,6 +110,6 @@ for ax, (name, (cols, units, worse)) in zip(axes.flat, BIOMARKERS.items()):
 
 axes[0, 0].plot([], [], "D", mfc="white", mec="gray", mew=2, label="Interpolated estimate")
 fig.legend(*axes[0, 0].get_legend_handles_labels(), loc="lower center", ncol=4)
-fig.suptitle("Measured values (circles) and interpolated estimates (diamonds)")
+fig.suptitle("Measured Values (Circles) and Interpolated Estimates (Diamonds)")
 plt.tight_layout(rect=[0, 0.06, 1, 1])
 plt.show()
